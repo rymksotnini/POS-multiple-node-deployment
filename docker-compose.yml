@@ -1,0 +1,401 @@
+services:
+  bootnode:
+    image: ethereum/client-go:alltools-latest
+    command:
+      - bootnode
+      - -nodekey
+      - /bootnode/bootnode.key
+      - -addr
+      - :30301
+      - -verbosity
+      - "9"
+    volumes:
+      - ./bootnode:/bootnode
+    ports:
+      - "30301:30301"
+      - "30301:30301/udp"
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.0.2
+
+  geth1-remove-db:
+    image: "alpine:latest"
+    command: rm -rf /execution/geth
+    volumes:
+      - ./config/validator_1/execution:/execution
+
+  geth1-init:
+    image: "ethereum/client-go:latest"
+    command: --datadir=/root/.ethereum init /root/.ethereum/genesis.json
+    volumes:
+      - ./config/validator_1/execution:/root/.ethereum
+    depends_on:
+      geth1-remove-db:
+        condition: service_completed_successfully
+
+  geth1:
+    image: ethereum/client-go:latest
+    volumes:
+      - ./config/validator_1/execution:/root/.ethereum
+      - ./config/validator_1/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --datadir=/root/.ethereum
+      - --networkid=14800
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.corsdomain=*
+      - --http.api=eth,net,web3,personal,admin
+      - --allow-insecure-unlock
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --authrpc.vhosts=*
+      - --authrpc.jwtsecret=/jwt.hex
+      - --syncmode=full
+      - --bootnodes=${BOOTNODE_ENODE}
+      - --ws.port=8546
+      - --port=30303
+      - --discovery.port=30303
+      - --password=/execution/password.txt
+      # - --verbosity=5
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "8551:8551"
+      - "30303:30303"
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.1.1
+
+  beacon1:
+    image: gcr.io/prysmaticlabs/prysm/beacon-chain:latest
+    volumes:
+      - ./config/validator_1/consensus:/consensus
+      - ./config/validator_1/execution:/execution
+      - ./config/validator_1/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --chain-id=14800
+      - --min-sync-peers=0
+      - --minimum-peers-per-subnet=0
+      - --interop-eth1data-votes
+      - --datadir=/consensus/beacondata
+      - --genesis-state=/consensus/genesis.ssz
+      - --chain-config-file=/consensus/config.yml
+      - --jwt-secret=/jwt.hex
+      - --rpc-host=0.0.0.0
+      - --rpc-port=4000
+      - --grpc-gateway-host=0.0.0.0
+      - --grpc-gateway-port=3500
+      - --monitoring-host=0.0.0.0
+      - --execution-endpoint=http://geth1:8551
+      - --accept-terms-of-use
+
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --contract-deployment-block=0
+      - --force-clear-db
+      - --p2p-static-id=true
+      - --p2p-tcp-port=1300
+      - --p2p-udp-port=1200
+      - --verbosity=debug
+      #beacon1ScriptClusterTokenStart
+      - --bootstrap-node=enr:-MK4QNAHXoHP952PdUgHA_KzGqyDjgD77jjCgk-GKMpVCz9rTaSMwAJnWRbm3GLNWUNXdfjaJoDs1XgAzbecMWRFdBOGAZHjH6s5h2F0dG5ldHOIAAAAAMAAAACEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAgKJc2VjcDI1NmsxoQKLOTRX86DdCH7oJEVr8775KHOb01bD-Jo30IWBTReS7IhzeW5jbmV0cw-DdGNwggUVg3VkcIIEsQ
+      - --bootstrap-node=enr:-MK4QICSzvo67TKwfyNnZ3BHQguQljhdBN9bNtdsffuAw4V1Y-wMdRsnlksMHnf4OqIngquEWOP9EiQCf3JcMwA3BP2GAZHjH6sRh2F0dG5ldHOIAAAAAAAAAAaEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAwKJc2VjcDI1NmsxoQOMsn99CkbZCxP49OsdQRDLLn711SvNoulr0epqhTLYIYhzeW5jbmV0cw-DdGNwggUWg3VkcIIEsg
+      #beacon1ScriptClusterTokenEnd
+    ports:
+      - "4000:4000"
+      - "3500:3500"
+      - "1300:1300"
+      - "1200:1200"
+    depends_on:
+      - geth1
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.1.2
+
+  validator1:
+    image: gcr.io/prysmaticlabs/prysm/validator:latest
+    command:
+      - --beacon-rpc-provider=beacon1:4000
+      - --beacon-rest-api-provider=beacon1:4000
+      - --datadir=/consensus/validatordata
+      - --accept-terms-of-use
+      - --interop-num-validators=20
+      - --interop-start-index=0
+      - --chain-config-file=/consensus/config.yml
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --force-clear-db
+      - --grpc-gateway-port=7501
+      - --rpc-port=7001
+      - --graffiti=blablabla1
+      # - --wallet-dir=/wallet
+      # - --wallet-password-file=/wallet/wallet_password.txt
+    depends_on:
+      - beacon1
+    ports:
+      - 8081:8081
+      - 7501:7501
+      - 7001:7001
+    volumes:
+      - ./config/validator_1/consensus:/consensus
+      - ./config/validator_1/validator_wallets:/wallet
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.1.3
+
+  geth2-remove-db:
+    image: "alpine:latest"
+    command: rm -rf /execution/geth
+    volumes:
+      - ./config/validator_2/execution:/execution
+
+  geth2-init:
+    image: "ethereum/client-go:latest"
+    command: --datadir=/root/.ethereum init /root/.ethereum/genesis.json
+    volumes:
+      - ./config/validator_2/execution:/root/.ethereum
+    depends_on:
+      geth2-remove-db:
+        condition: service_completed_successfully
+
+  geth2:
+    image: ethereum/client-go:latest
+    volumes:
+      - ./config/validator_2/execution:/root/.ethereum
+      - ./config/validator_2/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --datadir=/root/.ethereum
+      - --networkid=14800
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8547
+      - --http.corsdomain=*
+      - --http.api=eth,net,web3,personal,admin
+      - --allow-insecure-unlock
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8552
+      - --ws.port=8548
+      - --port=30304
+      - --discovery.port=30304
+      - --authrpc.vhosts=*
+      - --authrpc.jwtsecret=/jwt.hex
+      - --syncmode=full
+      - --bootnodes=${BOOTNODE_ENODE}
+      - --password=/execution/password.txt
+      # - --nodiscover
+      - --verbosity=5
+    ports:
+      - "8547:8547"
+      - "8548:8548"
+      - "8552:8552"
+      - "30304:30304"
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.2.1
+
+  beacon2:
+    image: gcr.io/prysmaticlabs/prysm/beacon-chain:latest
+    volumes:
+      - ./config/validator_2/consensus:/consensus
+      - ./config/validator_2/execution:/execution
+      - ./config/validator_2/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --chain-id=14800
+      - --min-sync-peers=0
+      - --minimum-peers-per-subnet=0
+      - --interop-eth1data-votes
+      - --datadir=/consensus/beacondata
+      - --genesis-state=/consensus/genesis.ssz
+      - --chain-config-file=/consensus/config.yml
+      - --jwt-secret=/jwt.hex
+      - --rpc-host=0.0.0.0
+      - --rpc-port=4001
+      - --grpc-gateway-host=0.0.0.0
+      - --grpc-gateway-port=3501
+      - --monitoring-host=0.0.0.0
+      - --execution-endpoint=http://geth2:8552
+      - --accept-terms-of-use
+
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --contract-deployment-block=0
+      - --force-clear-db
+      - --p2p-static-id=true
+      - --p2p-tcp-port=1301
+      - --p2p-udp-port=1201
+      - --verbosity=debug
+      #beacon2ScriptClusterTokenStart
+      - --bootstrap-node=enr:-MK4QGrET_19hW7Ej_2lLLojp2osi12FI83657sMyn3UiUqFAD_UHq5Pil-Lqafogl0bQrVFnruWPJ6TBABmPeibvxiGAZHjH6suh2F0dG5ldHOIAADAAAAAAACEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAQKJc2VjcDI1NmsxoQOKWJCKfPVpw5hVhiVGRFmU8FqwxYbR4HCN19LwRGvTcIhzeW5jbmV0cw-DdGNwggUUg3VkcIIEsA
+      - --bootstrap-node=enr:-MK4QICSzvo67TKwfyNnZ3BHQguQljhdBN9bNtdsffuAw4V1Y-wMdRsnlksMHnf4OqIngquEWOP9EiQCf3JcMwA3BP2GAZHjH6sRh2F0dG5ldHOIAAAAAAAAAAaEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAwKJc2VjcDI1NmsxoQOMsn99CkbZCxP49OsdQRDLLn711SvNoulr0epqhTLYIYhzeW5jbmV0cw-DdGNwggUWg3VkcIIEsg
+      #beacon2ScriptClusterTokenEnd
+    ports:
+      - "4001:4001"
+      - "3501:3501"
+      - "1301:1301"
+      - "1201:1201"
+    depends_on:
+      - geth2
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.2.2
+
+  validator2:
+    image: gcr.io/prysmaticlabs/prysm/validator:latest
+    command:
+      - --beacon-rpc-provider=beacon2:4001
+      - --beacon-rest-api-provider=beacon2:4001
+      - --datadir=/consensus/validatordata
+      - --accept-terms-of-use
+      - --interop-num-validators=20
+      - --interop-start-index=20
+      - --chain-config-file=/consensus/config.yml
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --force-clear-db
+      - --graffiti=blablabla2
+      - --grpc-gateway-port=7502
+      - --rpc-port=7002
+    depends_on:
+      - beacon2
+    ports:
+      - 8082:8082
+      - 7502:7502
+      - 7002:7002
+    volumes:
+      - ./config/validator_2/consensus:/consensus
+      - ./config/validator_2/validator_wallets:/wallet
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.2.3
+
+  geth3-remove-db:
+    image: "alpine:latest"
+    command: rm -rf /execution/geth
+    volumes:
+      - ./config/validator_3/execution:/execution
+
+  geth3-init:
+    image: "ethereum/client-go:latest"
+    command: --datadir=/root/.ethereum init /root/.ethereum/genesis.json
+    volumes:
+      - ./config/validator_3/execution:/root/.ethereum
+    depends_on:
+      geth3-remove-db:
+        condition: service_completed_successfully
+
+  geth3:
+    image: ethereum/client-go:latest
+    volumes:
+      - ./config/validator_3/execution:/root/.ethereum
+      - ./config/validator_3/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --datadir=/root/.ethereum
+      - --networkid=14800
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8549
+      - --http.corsdomain=*
+      - --http.api=eth,net,web3,personal,admin
+      - --allow-insecure-unlock
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8553
+      - --ws.port=8550
+      - --port=30305
+      - --discovery.port=30305
+      - --authrpc.vhosts=*
+      - --authrpc.jwtsecret=/jwt.hex
+      - --syncmode=full
+      - --bootnodes=${BOOTNODE_ENODE}
+      - --password=/execution/password.txt
+      # - --nodiscover
+      - --verbosity=5
+    ports:
+      - "8549:8549"
+      - "8550:8550"
+      - "8553:8553"
+      - "30305:30305"
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.3.1
+
+  beacon3:
+    image: gcr.io/prysmaticlabs/prysm/beacon-chain:latest
+    volumes:
+      - ./config/validator_3/consensus:/consensus
+      - ./config/validator_3/execution:/execution
+      - ./config/validator_3/jwt.hex:/jwt.hex:ro
+      - ./bootnode:/bootnode:ro
+    command:
+      - --chain-id=14800
+      - --min-sync-peers=0
+      - --minimum-peers-per-subnet=0
+      - --interop-eth1data-votes
+      - --datadir=/consensus/beacondata
+      - --rpc-host=0.0.0.0
+      - --rpc-port=4002
+      - --grpc-gateway-host=0.0.0.0
+      - --grpc-gateway-port=3502
+      - --monitoring-host=0.0.0.0
+      - --execution-endpoint=http://geth3:8553
+      - --accept-terms-of-use
+      - --genesis-state=/consensus/genesis.ssz
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --jwt-secret=/jwt.hex
+      - --chain-config-file=/consensus/config.yml
+      - --force-clear-db
+      - --p2p-static-id=true
+      - --p2p-tcp-port=1302
+      - --p2p-udp-port=1202
+      - --contract-deployment-block=0
+      - --verbosity=debug
+      #beacon3ScriptClusterTokenStart
+      - --bootstrap-node=enr:-MK4QGrET_19hW7Ej_2lLLojp2osi12FI83657sMyn3UiUqFAD_UHq5Pil-Lqafogl0bQrVFnruWPJ6TBABmPeibvxiGAZHjH6suh2F0dG5ldHOIAADAAAAAAACEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAQKJc2VjcDI1NmsxoQOKWJCKfPVpw5hVhiVGRFmU8FqwxYbR4HCN19LwRGvTcIhzeW5jbmV0cw-DdGNwggUUg3VkcIIEsA
+      - --bootstrap-node=enr:-MK4QNAHXoHP952PdUgHA_KzGqyDjgD77jjCgk-GKMpVCz9rTaSMwAJnWRbm3GLNWUNXdfjaJoDs1XgAzbecMWRFdBOGAZHjH6s5h2F0dG5ldHOIAAAAAMAAAACEZXRoMpAg8kZJYAAAOADh9QUAAAAAgmlkgnY0gmlwhAoKAgKJc2VjcDI1NmsxoQKLOTRX86DdCH7oJEVr8775KHOb01bD-Jo30IWBTReS7IhzeW5jbmV0cw-DdGNwggUVg3VkcIIEsQ
+      #beacon3ScriptClusterTokenEnd
+    ports:
+      - "4002:4002"
+      - "3502:3502"
+      - "1302:1302"
+      - "1202:1202"
+    depends_on:
+      - geth3
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.3.2
+
+  validator3:
+    image: gcr.io/prysmaticlabs/prysm/validator:latest
+    command:
+      - --beacon-rpc-provider=beacon3:4002
+      - --beacon-rest-api-provider=beacon3:4002
+      - --datadir=/consensus/validatordata
+      - --accept-terms-of-use
+      - --interop-num-validators=20
+      - --interop-start-index=40
+      - --chain-config-file=/consensus/config.yml
+      - --suggested-fee-recipient=${FEE_RECIPIENT}
+      - --force-clear-db
+      - --graffiti=blablabla3
+      - --grpc-gateway-port=7503
+      - --rpc-port=7003
+    depends_on:
+      - beacon3
+    ports:
+      - 8083:8081
+      - 7503:7503
+      - 7003:7003
+    volumes:
+      - ./config/validator_3/consensus:/consensus
+      - ./config/validator_3/validator_wallets:/wallet
+    networks:
+      ethereum-net:
+        ipv4_address: 10.10.3.3
+
+networks:
+  ethereum-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/16
